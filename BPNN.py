@@ -88,24 +88,24 @@ class PIDWithBPNN:
 		partial_diff = np.zeros(shape=(self.__classes, 3))
 		# Partial Differential Matrix
 		for j in range(self.__classes):
-			partial_diff[0][j] = self.error[0][j] - self.error[1][j]
-			partial_diff[1][j] = self.error[0][j]
-			partial_diff[2][j] = self.error[0][j] - 2 * self.error[1][j] + self.error[2][j]
-		J = [(0.5 * self.error[i] * self.error[i]) for i in range(self.actual_ratio.__len__())]  # Useless?
+			partial_diff[j][0] = self.error[0][j] - self.error[1][j]
+			partial_diff[j][1] = self.error[0][j]
+			partial_diff[j][2] = self.error[0][j] - 2 * self.error[1][j] + self.error[2][j]
+		# J = [(0.5 * self.error[i] * self.error[i]) for i in range(self.actual_ratio.__len__())]  # Useless?
 		x = self.error
 		# TODO: Standardization
 		for classIndex in range(self.__classes):
 			net_j = np.add(np.dot(self.__weight1[classIndex], x[:, classIndex]), self.__bias1[classIndex])
 			hj = np.array([f(net_j[0][_]) for _ in range(M)])
 			hj.shape = (hj.__len__(), 1)  # transpose
-			nets = np.dot(self.__weight2[classIndex], hj)
-			t = [g(nets[_], self.scale) for _ in range(3)]
+			net_s = np.dot(self.__weight2[classIndex], hj)
+			t = [g(net_s[_], self.scale) for _ in range(3)]
 			K[classIndex] = t  # for output
 
 			# train next weight matrix
 			delta_s = np.zeros(shape=(1, 3))
 			for s in range(3):
-				delta_s[0][s] = self.error[classIndex][0] * (-1) * partial_diff[classIndex][s] * g_diff(nets[s][0], self.scale)
+				delta_s[0][s] = self.error[0][classIndex] * (-1) * partial_diff[classIndex][s] * g_diff(net_s[s][0], self.scale)
 				for j in range(M):
 					delta_weight_sj = self.eta * delta_s[0][s] * hj[j] + self.alpha * self.__saveWeightChange2[classIndex][s][j]
 					self.__saveWeightChange2[classIndex][s][j] = delta_weight_sj

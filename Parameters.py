@@ -1,3 +1,5 @@
+import numpy as np
+
 # Frame structure
 M = 16  # Total time slots per frame
 M_BE = 8  # BE Slots
@@ -19,3 +21,6 @@ FrameLength = BI / ChannelRate  # Unit: sec
 SlotRate = BI / M  # Data Rate per slot (unit: sym)
 SlotLength = SlotRate / ChannelRate
 macMaxBe = 3  # by default
+
+CW_index_controller = np.array([1 for _ in range(HQ_TYPES + BE_TYPES)])
+CW_exponent_controller = np.array([1 for _ in range(HQ_TYPES + BE_TYPES)])

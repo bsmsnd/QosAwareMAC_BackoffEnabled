@@ -7,6 +7,7 @@ import Event
 import csv
 import WarningPrint
 import BPNN
+import Parameters
 
 
 ############################################################
@@ -19,6 +20,8 @@ if os.path.exists("para_K.csv"):
 ############################################################
 # global vars & constants definition (use global mark when use externally?)
 ############################################################
+
+eps = 0.00000001
 
 # Frame structure
 M = 16  # Total time slots per frame
@@ -35,8 +38,8 @@ aBaseSlotDuration = 60  # unit: symbols
 BO = 1
 SO = 1  # When BO ~= SO ==> inactive portion exist (sleep)
 aBaseSuperframeDuration = aBaseSlotDuration * aNumSuperframeSlots
-BI = aBaseSuperframeDuration * (2 ^ BO)
-SD = aBaseSuperframeDuration * (2 ^ SO)
+BI = aBaseSuperframeDuration * math.pow(2, BO)
+SD = aBaseSuperframeDuration * math.pow(2, SO)
 FrameLength = BI / ChannelRate  # Unit: sec
 SlotRate = BI / M  # Data Rate per slot (unit: sym)
 SlotLength = SlotRate / ChannelRate
@@ -67,11 +70,12 @@ completeEventList_BE_2 = []
 completeEventList_BE_3 = []
 
 # Controllers of Generators & CW
-TrafficSpeedController = [0.03, 0.03, 0.03, 0.055, 0.055, 0.055]  # total traffic: [sum] slotsize / slot
-_CW_index_controller = np.array([1 for _ in range(HQ_TYPES + BE_TYPES)])
-_CW_exponent_controller = np.array([1 for _ in range(HQ_TYPES + BE_TYPES)])
+# Warning: due to multiple usage, CW controllers are all stored in Parameter module
+TrafficSpeedController = [0.03, 0.03, 0.03, 0.03, 0.03, 0.03]  # total traffic: [sum] slotsize / slot
+Parameters.CW_index_controller = np.array([1 for _ in range(HQ_TYPES + BE_TYPES)])
+Parameters.CW_exponent_controller = np.array([1 for _ in range(HQ_TYPES + BE_TYPES)])
 CW_index_switch = False
-CW_exponent_switch = True  # Use NO MORE THAN ONE controller
+CW_exponent_switch = True# Use NO MORE THAN ONE controller
 ChannelState_HQ = 0  # 0 = Idle, 1 = Busy.
 ChannelState_BE = 0
 
@@ -92,7 +96,7 @@ controller_first_time_marker = True
 stat_first_time_marker = True
 
 # QoS Expectation
-QoS_expect = [0.02, 0.02, 0.02, 0.02, 0.025, 0.02]
+QoS_expect = [0.022, 0.027, 0.02, 0.015, 0.025, 0.02]
 
 # Variables for simulation process
 HQ_NotFinishedSlots = 0
@@ -101,6 +105,10 @@ HQ_NotFinishedType = 0
 BE_NotFinishedType = 0
 last_event_HQ = []
 last_event_BE = []
+
+# Controllers:
+NN_QoS = []
+NN_exponent = []
 
 
 ############################################################
@@ -113,7 +121,7 @@ def save_backup_data(backup_file_name_prefix):
 	# File format: time, event_type, packet_type, size
 	# File naming: backup_file_name_prefix$TypeIndicator$.csv, where $TypeIndicator$ = 1,2,...,HQ_TYPES + BE_TYPES
 	for i in range(HQ_TYPES + BE_TYPES):
-		if i < M_HQ:
+		if i < HQ_TYPES:
 			file_name = backup_file_name_prefix + str(i + 1) + ".csv"
 			if os.path.exists(file_name):
 				os.remove(file_name)
@@ -121,15 +129,15 @@ def save_backup_data(backup_file_name_prefix):
 				if i == 0:
 					for j in range(len(newEventList_HQ_1)):
 						print(newEventList_HQ_1[j].time, ',', newEventList_HQ_1[j].event_type, ',',
-							  newEventList_HQ_1[j].packet_type, ',', newEventList_HQ_1[j].size, ',', file=f)
+							  newEventList_HQ_1[j].packet_type, ',', newEventList_HQ_1[j].size, file=f)
 				elif i == 1:
 					for j in range(len(newEventList_HQ_2)):
 						print(newEventList_HQ_2[j].time, ',', newEventList_HQ_2[j].event_type, ',',
-							  newEventList_HQ_2[j].packet_type, ',', newEventList_HQ_2[j].size, ',', file=f)
+							  newEventList_HQ_2[j].packet_type, ',', newEventList_HQ_2[j].size, file=f)
 				elif i == 2:
 					for j in range(len(newEventList_HQ_3)):
 						print(newEventList_HQ_3[j].time, ',', newEventList_HQ_3[j].event_type, ',',
-							  newEventList_HQ_3[j].packet_type, ',', newEventList_HQ_3[j].size, ',', file=f)
+							  newEventList_HQ_3[j].packet_type, ',', newEventList_HQ_3[j].size, file=f)
 				else:
 					WarningPrint.warning_print("error packet type at data saving process")
 		else:
@@ -140,15 +148,15 @@ def save_backup_data(backup_file_name_prefix):
 				if i == 3:
 					for j in range(len(newEventList_BE_1)):
 						print(newEventList_BE_1[j].time, ',', newEventList_BE_1[j].event_type, ',',
-							  newEventList_BE_1[j].packet_type, ',', newEventList_BE_1[j].size, ',', file=f)
+							  newEventList_BE_1[j].packet_type, ',', newEventList_BE_1[j].size, file=f)
 				elif i == 4:
 					for j in range(len(newEventList_BE_2)):
 						print(newEventList_BE_2[j].time, ',', newEventList_BE_2[j].event_type, ',',
-							  newEventList_BE_2[j].packet_type, ',', newEventList_BE_2[j].size, ',', file=f)
+							  newEventList_BE_2[j].packet_type, ',', newEventList_BE_2[j].size, file=f)
 				elif i == 5:
 					for j in range(len(newEventList_BE_3)):
 						print(newEventList_BE_3[j].time, ',', newEventList_BE_3[j].event_type, ',',
-							  newEventList_BE_3[j].packet_type, ',', newEventList_BE_3[j].size, ',', file=f)
+							  newEventList_BE_3[j].packet_type, ',', newEventList_BE_3[j].size, file=f)
 				else:
 					WarningPrint.warning_print("error packet type at data saving process")
 
@@ -169,14 +177,14 @@ def load_backup_data(backup_file_name_prefix):
 			with open(file_name, 'r') as f:
 				reader = csv.reader(f)
 				for row in reader:
-					read_time = row[0]
-					read_event_type = row[1]
-					read_packet_type = row[2]
-					read_size = row[3]
+					read_time = int(row[0])
+					read_event_type = int(row[1])
+					read_packet_type = int(row[2])
+					read_size = int(row[3])
 					event = Event.Event(time=read_time, event_type=read_event_type, packet_type=read_packet_type,
 										size=read_size)
 					event_list.append(event)
-			if i < M_HQ:
+			if i < HQ_TYPES:
 				if i == 0:
 					newEventList_HQ_1 = event_list
 				elif i == 1:
@@ -231,16 +239,18 @@ def packet_init(start_time, end_time, pkt_type, traffic_mode):
 	while True:
 		# Packet size distribution: PARETO
 		pkt_size = (np.random.pareto(alpha) + 1) * scale  # +1 to shift cutoff value
-		interval = math.ceil(np.random.rayleigh(interval_mean) / SlotRate)
-		cur_time = cur_time + math.ceil(interval / SlotLength)
+		interval = math.ceil(abs(np.random.normal(interval_mean,interval_mean/5)) / SlotLength)
+		cur_time = cur_time + interval
 		if cur_time > end_time:
 			break
 		else:
-			new_event = Event.Event(time=cur_time, packet_type=pkt_type, size=pkt_size)
+			new_event = Event.Event(time=cur_time, packet_type=pkt_type, size=math.ceil(pkt_size/SlotRate))
 			event_list.append(new_event)
 
 
 def update_remain_slots_for_hq():
+	if M_HQ - curTime % M < 0:
+		WarningPrint.warning_print("error update remaining slots")
 	return M_HQ - curTime % M
 
 
@@ -249,6 +259,8 @@ def update_remain_slots_for_be():
 
 
 def run(end_time):
+	# TODO: pointer mistake at event_handler for transmission completed.
+	# New idea: put all stat data into original definition.
 	global curTime
 	global HQ_NotFinishedSlots
 	global HQ_NotFinishedType
@@ -267,48 +279,68 @@ def run(end_time):
 	while curTime < end_time and (
 			len(newEventList_HQ_1) > 0 or len(newEventList_HQ_2) > 0 or len(newEventList_HQ_3) > 0 or len(
 		newEventList_BE_1) > 0 or len(newEventList_BE_2) > 0 or len(newEventList_BE_3) > 0):
+		# print(curTime)
+		# if newEventList_HQ_1[0].event_type == 3 or newEventList_HQ_2[0].event_type == 3 \
+		# 	or newEventList_HQ_3[0].event_type == 3 or newEventList_BE_1[0].event_type == 3 \
+		# 	   or newEventList_BE_2[0].event_type == 3 or newEventList_BE_3[0].event_type == 3:
+		# 	pass
 		while curTime % M < M_HQ:
 			cur_cycle_remain_slot_for_hq = update_remain_slots_for_hq()
 			if HQ_NotFinishedSlots > 0:  # complete transmission from last period
 				if HQ_NotFinishedSlots > cur_cycle_remain_slot_for_hq:
-					curTime = curTime + cur_cycle_remain_slot_for_hq
+					curTime += cur_cycle_remain_slot_for_hq
 					HQ_NotFinishedSlots -= cur_cycle_remain_slot_for_hq
 					cur_cycle_remain_slot_for_hq = 0
 				else:
-					curTime = curTime = HQ_NotFinishedSlots
-					HQ_NotFinishedSlots = 0
+					curTime += HQ_NotFinishedSlots
+					cur_cycle_remain_slot_for_hq = update_remain_slots_for_hq()
 					busyBefore_HQ = 1
 					if HQ_NotFinishedType == 1:
-						completeEventList_HQ_1.append(last_event_HQ.events_handler(cur_time=curTime))
+						newEventList_HQ_1[0].event_type = 3
+						newEventList_HQ_1[0].events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_HQ)
+						completeEventList_HQ_1.append(newEventList_HQ_1.pop(0))
 					elif HQ_NotFinishedType == 2:
-						completeEventList_HQ_2.append(last_event_HQ.events_handler(cur_time=curTime))
+						newEventList_HQ_2[0].event_type = 3
+						newEventList_HQ_2[0].events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_HQ)
+						completeEventList_HQ_2.append(newEventList_HQ_2.pop(0))
 					elif HQ_NotFinishedType == 3:
-						completeEventList_HQ_3.append(last_event_HQ.events_handler(cur_time=curTime))
+						newEventList_HQ_3[0].event_type = 3
+						newEventList_HQ_3[0].events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_HQ)
+						completeEventList_HQ_3.append(newEventList_HQ_3.pop(0))
 					else:
-						print("packet type %d runs in HQ by mistake", HQ_NotFinishedType)
-					del last_event_HQ
+						print("packet type ", HQ_NotFinishedType, " runs in HQ by mistake" )
+					HQ_NotFinishedSlots = 0
 			while cur_cycle_remain_slot_for_hq > 0:  # transmission in this cycle
 				min_time = math.inf
 				if len(newEventList_HQ_1):
 					if newEventList_HQ_1[0].event_type == 1:
 						min_time = newEventList_HQ_1[0].time
-					else:
+					elif newEventList_HQ_1[0].event_type == 2:
 						min_time = curTime + (newEventList_HQ_1[0].backoffCompleteTimeStamp - idleTimeStamp_HQ)
+					else:
+						WarningPrint.warning_print("Error type of event with packet type: 1")
+
 					if newEventList_HQ_2[0].event_type == 1:
-						min_time = newEventList_HQ_2[0].time
+						min_time = min(newEventList_HQ_2[0].time, min_time)
+					elif newEventList_HQ_2[0].event_type == 2:
+						min_time = min(curTime + (newEventList_HQ_2[0].backoffCompleteTimeStamp - idleTimeStamp_HQ), min_time)
 					else:
-						min_time = curTime + (newEventList_HQ_2[0].backoffCompleteTimeStamp - idleTimeStamp_HQ)
+						WarningPrint.warning_print("Error type of event with packet type: 2")
+
 					if newEventList_HQ_3[0].event_type == 1:
-						min_time = newEventList_HQ_3[0].time
+						min_time = min(newEventList_HQ_3[0].time, min_time)
+					elif newEventList_HQ_3[0].event_type == 2:
+						min_time = min(curTime + (newEventList_HQ_3[0].backoffCompleteTimeStamp - idleTimeStamp_HQ), min_time)
 					else:
-						min_time = curTime + (newEventList_HQ_3[0].backoffCompleteTimeStamp - idleTimeStamp_HQ)
-				if min_time - curTime > cur_cycle_remain_slot_for_hq:  # start transmission in next frame
-					curTime = curTime + cur_cycle_remain_slot_for_hq
+						WarningPrint.warning_print("Error type of event with packet type: 3")
+
+				if min_time - curTime >= cur_cycle_remain_slot_for_hq:  # start transmission in next frame
+					curTime += cur_cycle_remain_slot_for_hq
 					idleTimeStamp_HQ = idleTimeStamp_HQ + cur_cycle_remain_slot_for_hq
-					cur_cycle_remain_slot_for_hq = 0
+					cur_cycle_remain_slot_for_hq = update_remain_slots_for_hq()
 					break
 				else:  # start transmission within this frame, move to that slot
-					if min_time >= curTime:  # change the time
+					if min_time > curTime:  # change the time
 						idleTimeStamp_HQ = idleTimeStamp_HQ + (min_time - curTime)
 						curTime = min_time
 						cur_cycle_remain_slot_for_hq = update_remain_slots_for_hq()
@@ -341,93 +373,113 @@ def run(end_time):
 
 				if sum(transmission_log) > 1:  # Collide
 					if transmission_log[0]:
-						this_event = newEventList_HQ_1[0]
-						this_event.event_type = 4
-						this_event.events_handler(idle_time_stamp=idleTimeStamp_HQ)
-						if this_event.event_type == 5:
+						newEventList_HQ_1[0].event_type = 4
+						newEventList_HQ_1[0].events_handler(idle_time_stamp=idleTimeStamp_HQ)
+						if newEventList_HQ_1[0].event_type == 5:
 							newEventList_HQ_1.pop(0)
 					if transmission_log[1]:
-						this_event = newEventList_HQ_2[0]
-						this_event.event_type = 4
-						this_event.events_handler(idle_time_stamp=idleTimeStamp_HQ)
-						if this_event.event_type == 5:
+						newEventList_HQ_2[0].event_type = 4
+						newEventList_HQ_2[0].events_handler(idle_time_stamp=idleTimeStamp_HQ)
+						if newEventList_HQ_2[0].event_type == 5:
 							newEventList_HQ_2.pop(0)
 					if transmission_log[2]:
-						this_event = newEventList_HQ_3[0]
-						this_event.event_type = 4
-						this_event.events_handler(idle_time_stamp=idleTimeStamp_HQ)
-						if this_event.event_type == 5:
+						newEventList_HQ_3[0].event_type = 4
+						newEventList_HQ_3[0].events_handler(idle_time_stamp=idleTimeStamp_HQ)
+						if newEventList_HQ_3[0].event_type == 5:
 							newEventList_HQ_3.pop(0)
 					curTime = curTime + 1
 					cur_cycle_remain_slot_for_hq = cur_cycle_remain_slot_for_hq - 1
+					continue
 
 				if sum(transmission_log) == 1:  # start transmission
 					if to_transmit == 1:
-						this_event = newEventList_HQ_1.pop(0)  # confirmed to be processed, delete from Event list
+						this_event = newEventList_HQ_1[0]  # confirmed to be processed, delete from Event list
 					elif to_transmit == 2:
-						this_event = newEventList_HQ_2.pop(0)
+						this_event = newEventList_HQ_2[0]
 					elif to_transmit == 3:
-						this_event = newEventList_HQ_3.pop(0)
+						this_event = newEventList_HQ_3[0]
 					if this_event.size > cur_cycle_remain_slot_for_hq:  # unable to finish in this frame
-						curTime = cur_cycle_remain_slot_for_hq + curTime
+						curTime += cur_cycle_remain_slot_for_hq
 						HQ_NotFinishedSlots = this_event.size - cur_cycle_remain_slot_for_hq
 						HQ_NotFinishedType = this_event.packet_type
-						this_event.event_type = 3
-						last_event_HQ = this_event
+						cur_cycle_remain_slot_for_hq = 0
 					else:  # complete transmission now
-						curTime = curTime + this_event.size
-						cur_cycle_remain_slot_for_hq = cur_cycle_remain_slot_for_hq - this_event.size
+						curTime += this_event.size
+						cur_cycle_remain_slot_for_hq = update_remain_slots_for_hq()
 						this_event.event_type = 3
+						this_event.events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_HQ)
 						if to_transmit == 1:
-							completeEventList_HQ_1.append(this_event.events_handler(cur_time=curTime))
+							completeEventList_HQ_1.append(newEventList_HQ_1.pop(0))
 						elif to_transmit == 2:
-							completeEventList_HQ_2.append(this_event.events_handler(cur_time=curTime))
+							completeEventList_HQ_2.append(newEventList_HQ_2.pop(0))
 						elif to_transmit == 3:
-							completeEventList_HQ_3.append(this_event.events_handler(cur_time=curTime))
+							completeEventList_HQ_3.append(newEventList_HQ_3.pop(0))
+						else:
+							print("packet type ", to_transmit, " runs in HQ by mistake")
+						HQ_NotFinishedSlots = 0
+						HQ_NotFinishedType = -1
 					del this_event
+					continue
 
 				if sum(transmission_log) == 0:
+					curTime += 1
+					cur_cycle_remain_slot_for_hq = update_remain_slots_for_hq()
+					idleTimeStamp_HQ += 1
 					break
 
 		while M_HQ <= curTime % M < M_HQ + M_BE:
 			cur_cycle_remain_slot_for_be = update_remain_slots_for_be()
 			if BE_NotFinishedSlots > 0:  # complete transmission from last period
 				if BE_NotFinishedSlots > cur_cycle_remain_slot_for_be:
-					curTime = curTime + cur_cycle_remain_slot_for_be
+					curTime += cur_cycle_remain_slot_for_be
 					BE_NotFinishedSlots -= cur_cycle_remain_slot_for_be
 					cur_cycle_remain_slot_for_be = 0
 				else:
-					curTime = BE_NotFinishedSlots
-					BE_NotFinishedSlots = 0
+					curTime += BE_NotFinishedSlots
+					cur_cycle_remain_slot_for_be = update_remain_slots_for_be()
 					busyBefore_BE = 1
 					if BE_NotFinishedType == 4:
-						completeEventList_BE_1.append(last_event_BE.events_handler(cur_time=curTime))
+						newEventList_BE_1[0].event_type = 3
+						newEventList_BE_1[0].events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_BE)
+						completeEventList_BE_1.append(newEventList_BE_1.pop(0))
 					elif BE_NotFinishedType == 5:
-						completeEventList_BE_2.append(last_event_BE.events_handler(cur_time=curTime))
+						newEventList_BE_2[0].event_type = 3
+						newEventList_BE_2[0].events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_BE)
+						completeEventList_BE_2.append(newEventList_BE_2.pop(0))
 					elif BE_NotFinishedType == 6:
-						completeEventList_BE_3.append(last_event_BE.events_handler(cur_time=curTime))
+						newEventList_BE_3[0].event_type = 3
+						newEventList_BE_3[0].events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_BE)
+						completeEventList_BE_3.append(newEventList_BE_3.pop(0))
 					else:
-						print("packet type %d runs in BE by mistake", BE_NotFinishedType)
-					del last_event_BE
+						print("packet type ", BE_NotFinishedType, " runs in BE by mistake", )
+					BE_NotFinishedSlots = 0
 			while cur_cycle_remain_slot_for_be > 0:  # transmission in this cycle
 				min_time = math.inf
 				if len(newEventList_BE_1):
 					if newEventList_BE_1[0].event_type == 1:
 						min_time = newEventList_BE_1[0].time
-					else:
+					elif newEventList_BE_1[0].event_type == 2:
 						min_time = curTime + (newEventList_BE_1[0].backoffCompleteTimeStamp - idleTimeStamp_BE)
+					else:
+						WarningPrint.warning_print("Error type of event with packet type: 4")
+
 					if newEventList_BE_2[0].event_type == 1:
-						min_time = newEventList_BE_2[0].time
+						min_time = min(newEventList_BE_2[0].time, min_time)
+					elif newEventList_BE_2[0].event_type == 2:
+						min_time = min(curTime + (newEventList_BE_2[0].backoffCompleteTimeStamp - idleTimeStamp_BE), min_time)
 					else:
-						min_time = curTime + (newEventList_BE_2[0].backoffCompleteTimeStamp - idleTimeStamp_BE)
+						WarningPrint.warning_print("Error type of event with packet type: 5")
+
 					if newEventList_BE_3[0].event_type == 1:
-						min_time = newEventList_BE_3[0].time
+						min_time = min(newEventList_BE_3[0].time, min_time)
+					elif newEventList_BE_3[0].event_type == 2:
+						min_time = min(curTime + (newEventList_BE_3[0].backoffCompleteTimeStamp - idleTimeStamp_BE), min_time)
 					else:
-						min_time = curTime + (newEventList_BE_3[0].backoffCompleteTimeStamp - idleTimeStamp_BE)
-				if min_time - curTime > cur_cycle_remain_slot_for_be:  # start transmission in next frame
-					curTime = curTime + cur_cycle_remain_slot_for_be
+						WarningPrint.warning_print("Error type of event with packet type: 3")
+				if min_time - curTime >= cur_cycle_remain_slot_for_be:  # start transmission in next frame
+					curTime += cur_cycle_remain_slot_for_be
 					idleTimeStamp_BE = idleTimeStamp_BE + cur_cycle_remain_slot_for_be
-					cur_cycle_remain_slot_for_be = 0
+					cur_cycle_remain_slot_for_be = update_remain_slots_for_hq()
 					break
 				else:  # start transmission within this frame, move to that slot
 					if min_time >= curTime:  # change the time
@@ -463,61 +515,67 @@ def run(end_time):
 
 				if sum(transmission_log) > 1:  # Collide
 					if transmission_log[0]:
-						this_event = newEventList_BE_1[0]
-						this_event.event_type = 4
-						this_event.events_handler(idle_time_stamp=idleTimeStamp_BE)
-						if this_event.event_type == 5:
+						newEventList_BE_1[0].event_type = 4
+						newEventList_BE_1[0].events_handler(idle_time_stamp=idleTimeStamp_BE)
+						if newEventList_BE_1[0].event_type == 5:
 							newEventList_BE_1.pop(0)
 					if transmission_log[1]:
-						this_event = newEventList_BE_2[0]
-						this_event.event_type = 4
-						this_event.events_handler(idle_time_stamp=idleTimeStamp_BE)
-						if this_event.event_type == 5:
+						newEventList_BE_2[0].event_type = 4
+						newEventList_BE_2[0].events_handler(idle_time_stamp=idleTimeStamp_BE)
+						if newEventList_BE_2[0].event_type == 5:
 							newEventList_BE_2.pop(0)
 					if transmission_log[2]:
-						this_event = newEventList_BE_3[0]
-						this_event.event_type = 4
-						this_event.events_handler(idle_time_stamp=idleTimeStamp_BE)
-						if this_event.event_type == 5:
+						newEventList_BE_3[0].event_type = 4
+						newEventList_BE_3[0].events_handler(idle_time_stamp=idleTimeStamp_BE)
+						if newEventList_BE_3[0].event_type == 5:
 							newEventList_BE_3.pop(0)
 					curTime = curTime + 1
 					cur_cycle_remain_slot_for_be = cur_cycle_remain_slot_for_be - 1
+					continue
 
 				if sum(transmission_log) == 1:  # start transmission
 					if to_transmit == 4:
-						this_event = newEventList_BE_1.pop(0)  # confirmed to be processed, delete from Event list
+						this_event = newEventList_BE_1[0]  # confirmed to be processed, delete from Event list
 					elif to_transmit == 5:
-						this_event = newEventList_BE_2.pop(0)
+						this_event = newEventList_BE_2[0]
 					elif to_transmit == 6:
-						this_event = newEventList_BE_3.pop(0)
+						this_event = newEventList_BE_3[0]
 					if this_event.size > cur_cycle_remain_slot_for_be:  # unable to finish in this frame
-						curTime = cur_cycle_remain_slot_for_be + curTime
+						curTime += cur_cycle_remain_slot_for_be
 						BE_NotFinishedSlots = this_event.size - cur_cycle_remain_slot_for_be
 						BE_NotFinishedType = this_event.packet_type
-						this_event.event_type = 3
-						last_event_BE = this_event
+						cur_cycle_remain_slot_for_be = 0
 					else:  # complete transmission now
-						curTime = curTime + this_event.size
-						cur_cycle_remain_slot_for_be = cur_cycle_remain_slot_for_be - this_event.size
+						curTime += this_event.size
+						cur_cycle_remain_slot_for_be = update_remain_slots_for_be()
 						this_event.event_type = 3
+						this_event.events_handler(cur_time=curTime, idle_time_stamp=idleTimeStamp_BE)
 						if to_transmit == 4:
-							completeEventList_BE_1.append(this_event.events_handler(cur_time=curTime))
+							completeEventList_BE_1.append(newEventList_BE_1.pop(0))
 						elif to_transmit == 5:
-							completeEventList_BE_2.append(this_event.events_handler(cur_time=curTime))
+							completeEventList_BE_2.append(newEventList_BE_2.pop(0))
 						elif to_transmit == 6:
-							completeEventList_BE_3.append(this_event.events_handler(cur_time=curTime))
+							completeEventList_BE_3.append(newEventList_BE_3.pop(0))
+						else:
+							print("packet type ", to_transmit, " runs in BE by mistake")
+						BE_NotFinishedSlots = 0
+						BE_NotFinishedType = -1
 					del this_event
+					continue
 
 				if sum(transmission_log) == 0:
+					curTime += 1
+					cur_cycle_remain_slot_for_be = update_remain_slots_for_be()
+					idleTimeStamp_BE += 1
 					break
 
 
 def print_data_to_file(file_name, var_to_print, delete_switch=False):
 	# Recommendation: save file in CSV format for further usage
-	if delete_switch is True and os.path.exists(file_name):
+	if delete_switch and os.path.exists(file_name):
 		os.remove(file_name)
 	with open(file_name, 'a') as f:
-		if not isinstance(var_to_print, list):  # single value output [as expected]
+		if (not isinstance(var_to_print, list)) and (not isinstance(var_to_print,np.ndarray)):  # single value output [as expected]
 			print(var_to_print, file=f)
 		else:
 			for i in range(len(var_to_print) - 1):
@@ -528,7 +586,7 @@ def print_data_to_file(file_name, var_to_print, delete_switch=False):
 def stat():
 	global last_time  # should exist a better way?
 	global delay_average
-	if last_time not in globals().keys():  # First time init
+	if 'last_time' not in globals().keys():  # First time init
 		if os.path.exists("pktCnt.csv"):
 			os.remove("pktCnt.csv")
 		if os.path.exists("delay.csv"):
@@ -545,81 +603,90 @@ def stat():
 	effective_slots = 0
 	tot_collisions = 0
 	delay = [0 for _ in range(BE_TYPES + HQ_TYPES)]
-	for obj in completeEventList_HQ_1:
+	while len(completeEventList_HQ_1) > 0:
+		obj = completeEventList_HQ_1.pop()
 		effective_slots += obj.size
-		tot_collisions += obj.collision_count
-		delay[0] += obj.time_cost
-	for obj in completeEventList_HQ_2:
+		tot_collisions += obj.collisionCount
+		delay[0] += obj.time_cost()
+	while len(completeEventList_HQ_2) > 0:
+		obj = completeEventList_HQ_2.pop()
 		effective_slots += obj.size
-		tot_collisions += obj.collision_count
-		delay[1] += obj.time_cost
-	for obj in completeEventList_HQ_3:
+		tot_collisions += obj.collisionCount
+		delay[1] += obj.time_cost()
+	while len(completeEventList_HQ_3) > 0:
+		obj = completeEventList_HQ_3.pop()
 		effective_slots += obj.size
-		tot_collisions += obj.collision_count
-		delay[2] += obj.time_cost
-	for obj in completeEventList_BE_1:
+		tot_collisions += obj.collisionCount
+		delay[2] += obj.time_cost()
+	while len(completeEventList_BE_1) > 0:
+		obj = completeEventList_BE_1.pop()
 		effective_slots += obj.size
-		tot_collisions += obj.collision_count
-		delay[3] += obj.time_cost
-	for obj in completeEventList_BE_2:
+		tot_collisions += obj.collisionCount
+		delay[3] += obj.time_cost()
+	while len(completeEventList_BE_2) > 0:
+		obj = completeEventList_BE_2.pop()
 		effective_slots += obj.size
-		tot_collisions += obj.collision_count
-		delay[4] += obj.time_cost
-	for obj in completeEventList_BE_3:
+		tot_collisions += obj.collisionCount
+		delay[4] += obj.time_cost()
+	while len(completeEventList_BE_3) > 0:
+		obj = completeEventList_BE_3.pop()
 		effective_slots += obj.size
-		tot_collisions += obj.collision_count
-		delay[5] += obj.time_cost
+		tot_collisions += obj.collisionCount
+		delay[5] += obj.time_cost()
 	delay_average = np.divide(delay, pkt_count)
 
 	# Display some data on screen
-	print("effecive/total slots: ", effective_slots, ' / ', curTime - last_time)
+	print("effective/total slots: ", effective_slots, ' / ', curTime - last_time)
 	print("collision count: ", tot_collisions)
 	print("average delay(sec): ", np.multiply(delay_average, SlotLength))
 	print("average delay(slots): ", delay_average)
-	print("failure count: ", failCount)
+	print("failure count: ", Event.failCount)
 
 	# Write data to file for further analysis
 	print_data_to_file(file_name='pktCnt.csv', var_to_print=pkt_count, delete_switch=(last_time == 0))
 	print_data_to_file(file_name="delay.csv", var_to_print=np.multiply(delay_average, SlotLength),
 					   delete_switch=(last_time == 0))
+	last_time = curTime
 
 
 def controller():
 	global NN_QoS
 	global NN_exponent
 	global delay_average
-	global _CW_index_controller
-	global _CW_exponent_controller
 
-	if isinstance(NN_QoS, BPNN.PIDWithBPNN):
+	if not isinstance(NN_QoS, BPNN.PIDWithBPNN):
 		NN_QoS = BPNN.PIDWithBPNN(expect_ratio=QoS_expect)
-		NN_QoS.scale = 1
+		NN_QoS.scale = 0.1
 		NN_QoS.eta = 0.1126
 		NN_exponent = BPNN.PIDWithBPNN(expect_ratio=QoS_expect)
-		NN_exponent.scale = 1
-		NN_exponent = 0.1126
+		NN_exponent.scale = 0.3
+		NN_exponent.eta = 0.1126
 	if CW_index_switch:
 		K = NN_QoS.train(np.multiply(delay_average, SlotLength))
 		error = NN_QoS.error
-		r = np.array([K[0][i] * (error[0][i] - error[1][i]) + K[1][i] * error[0][i]
-			 + K[2][i] * (error[0][i] - 2 * error[1][i] + error[2][i]) for i in range(BE_TYPES + HQ_TYPES)])
-		_CW_index_controller -= r
-		print("_CW_index_controller = ", _CW_index_controller)
+		r = np.array([K[i][0] * (error[0][i] - error[1][i]) + K[i][1] * error[0][i]
+			 + K[i][2] * (error[0][i] - 2 * error[1][i] + error[2][i]) for i in range(BE_TYPES + HQ_TYPES)])
+		Parameters.CW_index_controller = np.add(Parameters.CW_exponent_controller, -r)
+		print("CW_index_controller = ", Parameters.CW_index_controller)
+		print_data_to_file(file_name="CW index controller.csv", var_to_print=Parameters.CW_index_controller,
+						   delete_switch=(abs(r[0]) < eps))
 	elif CW_exponent_switch:
 		K = NN_exponent.train(np.multiply(delay_average, SlotLength))
 		error = NN_exponent.error
-		r = np.array([K[0][i] * (error[0][i] - error[1][i]) + K[1][i] * error[0][i]
-			 + K[2][i] * (error[0][i] - 2 * error[1][i] + error[2][i]) for i in range(BE_TYPES + HQ_TYPES)])
-		_CW_exponent_controller -= r
-		print("_CW_exponent_controller = ", _CW_exponent_controller)
+		r = np.array([K[i][0] * (error[0][i] - error[1][i]) + K[i][1] * error[0][i]
+			 + K[i][2] * (error[0][i] - 2 * error[1][i] + error[2][i]) for i in range(BE_TYPES + HQ_TYPES)])
+		Parameters.CW_exponent_controller = np.add(Parameters.CW_exponent_controller, -r)
+		print("CW_exponent_controller = ", Parameters.CW_exponent_controller)
+		print_data_to_file(file_name="CW exponent controller.csv", var_to_print=Parameters.CW_exponent_controller,
+						   delete_switch=(abs(r[0]) < eps))
 	else:
 		return
 	# Print K to file
 	# Format:
 	with open("para_K.csv", 'a') as f:
-		for j in range(len(K)):
-			for i in range(BPNN.D):
-				print(K[i][j], ',', end="\n" if (j == len(K) - 1 and i == BPNN.D - 1) else "")
+		for i in range(len(K)):
+			for j in range(BPNN.D):
+				print(K[i][j], end=("\n" if (j == len(K) - 1 and i == BPNN.D - 1) else ","), file=f)
 
 
 ############################################################
@@ -630,13 +697,13 @@ def controller():
 # Change the following switches to save data/recover data
 useBackupData = False
 saveData = False
-backupFileNamePrefix = "xx.txt"
+backupFileNamePrefix = "save_data"
 
 # Set sampling period here
-samplingPeriod = 2000
+samplingPeriod = 50000
 
-# Set size of dataset you wish to init at the beginning
-init_size = 10000
+# Set size of data set you wish to init at the beginning
+init_size = 300000
 
 if useBackupData:
 	load_backup_data(backupFileNamePrefix)
@@ -657,13 +724,16 @@ data_until = init_size
 
 print("*** Simulation begins. ***")
 upper = 0
-while len(newEventList_HQ_1) > 0 or len(newEventList_HQ_2) > 0 or len(newEventList_HQ_3) > 0 or len(
-		newEventList_BE_1) > 0 or len(newEventList_BE_2) > 0 or len(newEventList_BE_3) > 0:
+final_time = 5000000
+while (len(newEventList_HQ_1) > 0 or len(newEventList_HQ_2) > 0 or len(newEventList_HQ_3) > 0 or len(
+		newEventList_BE_1) > 0 or len(newEventList_BE_2) > 0 or len(newEventList_BE_3) > 0) and upper <= final_time:
 	if data_until - upper <= samplingPeriod:  # Generate data if necessary
 		for i in range(BE_TYPES + HQ_TYPES):
 			packet_init(data_until, data_until + samplingPeriod, i + 1, TrafficSpeedController[i])
+		data_until += samplingPeriod
 	upper = upper + samplingPeriod
 	run(upper)
 	# Comment the following line to disable controller
-	controller()
+	stat()
+	# controller()
 print("*** Simulation Completed. ***")
